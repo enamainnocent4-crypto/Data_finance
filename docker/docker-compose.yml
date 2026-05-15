@@ -1,0 +1,169 @@
+version: '3.8'
+
+services:
+
+  # ZOOKEEPER
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    networks:
+      - fraud_net
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+  # KAFKA
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    networks:
+      - fraud_net
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  # SPARK MASTER
+  spark-master:
+    image: apache/spark:3.5.1
+    container_name: spark-master
+    networks:
+      - fraud_net
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master
+    volumes:
+      - ..:/opt/spark/work-dir
+      - C:/Users/enama/mes_projets/data_finance/docker/jars:/opt/spark/jars/custom
+  # SPARK WORKER
+  spark-worker:
+    image: apache/spark:3.5.1
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    networks:
+      - fraud_net
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    ports:
+      - "8081:8081"
+    volumes:
+      - ..:/opt/spark/work-dir
+      - C:/Users/enama/mes_projets/data_finance/docker/jars:/opt/spark/jars/custom
+
+  # POSTGRES FRAUD DB
+ 
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: always
+    networks:
+      - fraud_net
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: fraud_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  # POSTGRES (AIRFLOW DB)
+  airflow_db:
+    image: postgres:15
+    container_name: airflow_db
+    networks:
+      - fraud_net
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+  # AIRFLOW INIT
+  airflow-init:
+    image: apache/airflow:2.9.1
+    container_name: airflow-init
+    depends_on:
+      - airflow_db
+    networks:
+      - fraud_net
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db:5432/airflow
+    volumes:
+      - C:/Users/enama/mes_projets/data_finance/dags:/opt/airflow/dags
+      - C:/Users/enama/mes_projets/data_finance/processing:/opt/airflow/processing
+      - airflow_logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: bash
+    command: >-
+      -c "airflow db migrate &&
+          airflow users create
+          --username admin
+          --password admin
+          --firstname admin
+          --lastname admin
+          --role Admin
+          --email admin@example.com"
+
+  # AIRFLOW WEBSERVER
+  airflow:
+    image: apache/airflow:2.9.1
+    container_name: airflow
+    depends_on:
+      - airflow-init
+    networks:
+      - fraud_net
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db:5432/airflow
+    ports:
+      - "8085:8080"
+    volumes:
+      - C:/Users/enama/mes_projets/data_finance/dags:/opt/airflow/dags
+      - C:/Users/enama/mes_projets/data_finance/processing:/opt/airflow/processing
+      - airflow_logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: webserver
+
+  # AIRFLOW SCHEDULER
+  airflow-scheduler:
+    image: apache/airflow:2.9.1
+    container_name: airflow-scheduler
+    depends_on:
+      - airflow-init
+    networks:
+      - fraud_net
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db:5432/airflow
+    volumes:
+      - C:/Users/enama/mes_projets/data_finance/dags:/opt/airflow/dags
+      - C:/Users/enama/mes_projets/data_finance/processing:/opt/airflow/processing
+      - airflow_logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: scheduler
+
+networks:
+  fraud_net:
+    driver: bridge
+
+volumes:
+  airflow_db_data:
+  airflow_logs:
+  postgres_data:
